@@ -19,3 +19,19 @@ ssize_t write_(int fd, const void* buf, size_t count) {
 		if (res == -1) return -1;
 	}
 }
+
+
+ssize_t read_until(int fd, void * buf, size_t count, char delimiter) {
+	ssize_t offset = 0;		
+	while (1) {
+		ssize_t read_cnt = read(fd, buf + offset, count - offset);
+		if (read_cnt == -1) return -1;
+		if (read_cnt == 0) return offset;			
+		for (int i = 0; i < read_cnt; i++) {
+			if (*((char*)buf + offset + i) == delimiter) {
+				return offset + read_cnt;
+			}
+		}
+		offset += read_cnt;
+	}
+}
