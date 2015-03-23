@@ -1,15 +1,15 @@
 all: lib/libhelpers.so cat/cat revwords/revwords
 
-lib/libhelpers.so:
-	cd lib && make
+lib/libhelpers.so: lib/Makefile
+	make -C lib
 
-cat/cat:
-	cd cat && make
+cat/cat: cat/Makefile
+	make -C cat
 
-revwords/revwords:
-	cd revwords && make
+revwords/revwords: revwords/Makefile
+	make -C revwords
 
 clean:
-	cd cat && make clean
-	cd lib && make clean
-	cd revwords && make clean
+	make clean -C lib
+	make clean -C cat
+	make clean -C revwords
