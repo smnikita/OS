@@ -35,3 +35,17 @@ ssize_t read_until(int fd, void * buf, size_t count, char delimiter) {
 		offset += read_cnt;
 	}
 }
+
+
+int spawn(const char * file, char * const argv []) {
+	int res = fork();
+	if (res == 0) {
+		exit(execvp(file, argv));
+	} else if (res > 0) {
+		int status;
+		wait(&status);
+		return status;
+	} else {
+		return -1;
+	}
+}
