@@ -10,7 +10,7 @@ int main() {
 	char out[BUF_SZ];	
 	int offset = 0;
 	while (1) {
-		ssize_t cnt = read_until(STDIN_FILENO, buffer + offset, BUF_SZ, delimiter);	
+		ssize_t cnt = read_until(STDIN_FILENO, buffer + offset, BUF_SZ - offset, delimiter);	
 		if (cnt < 0) return 1;
 		if (cnt == 0) break;
 		int l = 0;
