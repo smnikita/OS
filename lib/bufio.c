@@ -13,27 +13,21 @@ void buf_free(struct buf_t * p) {
 
 size_t buf_capacity(struct buf_t * p) {
     #ifdef DEBUG
-        if (buf == NULL) {
-            abort();
-        }
+        if (buf == NULL) abort();
     #endif
     return p->capacity;
 }
 
 size_t buf_size(struct buf_t * p) {
     #ifdef DEBUG
-        if (buf == NULL) {
-            abort();
-        }
+        if (buf == NULL) abort();        
     #endif
     return p->size;
 }
 
 ssize_t buf_fill(fd_t fd, struct buf_t *buf, size_t required) {
     #ifdef DEBUG
-        if (buf == NULL || buf->capacity < required) {
-            abort();
-        }
+        if (buf == NULL || buf->capacity < required) abort();        
     #endif
     char* buffer = (char*)buf + 2 * sizeof(size_t);
     ssize_t read_size;
@@ -51,17 +45,13 @@ ssize_t buf_fill(fd_t fd, struct buf_t *buf, size_t required) {
 
 ssize_t buf_flush(fd_t fd, struct buf_t *buf, size_t required) {
     #ifdef DEBUG
-        if (buf == NULL) {
-            abort();
-        }
+        if (buf == NULL) abort();        
     #endif
     char* buffer = (char*)buf + 2 * sizeof(size_t);    
     ssize_t written_cnt = 0;
     while (1) {
         ssize_t write_size = write(fd, buffer + written_cnt, buf->size - written_cnt);
-        if (write_size == -1) {
-            return -1;
-        }
+        if (write_size == -1) return -1;        
         written_cnt += write_size;
         if (written_cnt >= required || buf->size == written_cnt) {
             int i;
@@ -76,9 +66,7 @@ ssize_t buf_flush(fd_t fd, struct buf_t *buf, size_t required) {
 
 ssize_t buf_getline(fd_t fd, struct buf_t *buf, char* dest) {
     #ifdef DEBUG
-        if (buf == NULL) {
-            abort();
-        }
+        if (buf == NULL) abort();        
     #endif
     char* buffer = (char*)buf + 2 * sizeof(size_t);
     int i = 0, j = 0, written_cnt = 0;    
@@ -100,12 +88,9 @@ ssize_t buf_getline(fd_t fd, struct buf_t *buf, char* dest) {
     buf->size = 0;
     while (1) {
         ssize_t read_size = read(fd, buffer, buf->capacity);
-        if (read_size == -1) {
-            return -1;
-        }
-        if (read_size == 0) {
-            return written_cnt;
-        }
+        if (read_size == -1) return -1;        
+        if (read_size == 0) return written_cnt;
+        
         buf->size = read_size;
         for (i = 0; i < read_size; i++) {
             dest[written_cnt] = buffer[i];
@@ -118,14 +103,12 @@ ssize_t buf_getline(fd_t fd, struct buf_t *buf, char* dest) {
                 return written_cnt;
             }
         }
-    }
+    }   
 }
 
 ssize_t buf_write(fd_t fd, struct buf_t *buf, char* src, size_t len) {
     #ifdef DEBUG
-        if (buf == NULL) {
-            abort();
-        }
+        if (buf == NULL) abort();        
     #endif
     char* buffer = (char*)buf + 2 * sizeof(size_t);
     int i = 0, j = 0;
@@ -134,9 +117,7 @@ ssize_t buf_write(fd_t fd, struct buf_t *buf, char* src, size_t len) {
     for (i = 0; i < len; i++) {
         if (buf->size == buf->capacity) {
             ssize_t write_size = write(fd, buffer, buf->capacity);
-            if (write_size <= 0) {
-                return -1;
-            }
+            if (write_size <= 0) return -1;            
             for (j = 0; j < buf->capacity - write_size; j++) {
                 buffer[j] = buffer[j + write_size];
             }
