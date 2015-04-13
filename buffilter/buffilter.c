@@ -13,25 +13,19 @@ int main(int argn, char** argv) {
         args[i] = argv[i + 1];
     }
     while (1) {
-        ssize_t read_size = buf_getline(STDIN_FILENO, in, str);
-        if (read_size == -1) {
-            return 1;
-        }
-        if (read_size == 0) {
+        ssize_t read_cnt = buf_getline(STDIN_FILENO, in, str);
+        if (read_cnt == -1) return 1;        
+        if (read_cnt == 0) {
             buf_flush(STDOUT_FILENO, out, buf_size(out));
             return 0;
         }
         args[argn - 1] = str;
-        if (str[read_size - 1] == '\n') {
-            read_size--;
-        }
-        str[read_size] = 0;
+        if (str[read_cnt - 1] == '\n') read_cnt--;        
+        str[read_cnt] = 0;
         int status = spawn(args[0], args);
         if (status == 0) {
-            str[read_size] = '\n';
-            if (buf_write(STDOUT_FILENO, out, str, read_size + 1) == -1) {
-                return 1;
-            }
+            str[read_cnt] = '\n';
+            if (buf_write(STDOUT_FILENO, out, str, read_cnt + 1) == -1) return 1;
         }
     }
 	/*
