@@ -1,6 +1,6 @@
 all: libhelpers.so libbufio.so
 
-libhelpers.so: helpers.o
+libhelpers.so: helpers.o 
 	gcc -o libhelpers.so -shared helpers.o
 
 helpers.o: helpers.c
