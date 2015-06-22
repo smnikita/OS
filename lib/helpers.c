@@ -56,72 +56,84 @@ int spawn(const char * file, char * const argv []) {
 	}
 }
 
-struct execargs_t new_execargs_t(int argc, char** argv)
-{
-	struct execargs_t ret;
-	ret.args = (char**) malloc((argc + 1) * sizeof(char*));
-	for (int i = 0; i < argc; i++)
-		ret.args[i] = strdup(argv[i]);
-	ret.args[argc] = NULL;
-	return ret;
+
+execargs_t new_execargs_t(int argc, char** argv) {
+    execargs_t ret;
+    int i;
+    ret.argv = (char**) malloc((argc + 1) * sizeof(char*));
+    for (i = 0; i < argc; i++)
+        ret.argv[i] = strdup(argv[i]);
+    ret.argv[argc] = NULL;
+    return ret;
 }
 
-int exec(struct execargs_t* args)
-{
-	if (spawn(args->args[0], args->args) == -1)	return -1;
-	return 0;
-}
 
+int exec(execargs_t* args) {
+    return spawn(args->argv[0], args->argv);
+}
 
 int childn;
 int* childa;
 
-void sig_handler(int sig) {
-    for (int i = 0; i < childn; i++) 
-        kill(childa[i], SIGKILL);
-    childn = 0;
+void sig_handler(int sig) {	
+	for (int i = 0; i < childn; i++) {
+	    kill(childa[i], SIGKILL);
+	    waitpid(childa[i], NULL, 0);
+	}
+	childn = 0;	
 }
 
-int runpiped(struct execargs_t** programs, size_t n) 
-{
-	if (n == 0)
-		return 0;
-	int pipefd[n - 1][2];
-	int child[n];	 
-	for (int i = 0; i + 1 < n; i++) 
-        if (pipe2(pipefd[i], O_CLOEXEC) < 0)
-            return -1;
-
-    for (int i = 0; i < n; i++) 
-    {
-		if (!(child[i] = fork())) 
-		{
-			if (i + 1 < n)
-				dup2(pipefd[i][1], STDOUT_FILENO);
-            if (i > 0)
-				dup2(pipefd[i - 1][0], STDIN_FILENO);
-			_exit(execvp(programs[i]->args[0], programs[i]->args));	
-		}
-        if (child[i] == -1)
-            return -1;
-	}
-	for (int i = 0; i + 1 < n; i++) 
-	{
-		close(pipefd[i][1]);
-		close(pipefd[i][0]);
-	}
+int runpiped(execargs_t** programs, size_t n) {	
+    if (n == 0) return 0;
     
+    int pipefd[n - 1][2];
+    
+    int child[n];
+    for (int i = 0; i + 1 < n; i++) {
+        if (pipe2(pipefd[i], O_CLOEXEC) < 0) {
+            return -1;
+        }
+    }
+
+    for (int i = 0; i < n; i++) {
+        child[i] = fork();
+        if (child[i] == -1) {
+        	for (int j = 0; j < i; j++) {
+        		kill(child[j], SIGKILL);
+        		waitpid(child[j], NULL, 0);
+        	}
+        	return -1;        
+        }
+        if (child[i] == 0) {
+            if (i + 1 < n) dup2(pipefd[i][1], STDOUT_FILENO);            
+            if (i > 0) dup2(pipefd[i - 1][0], STDIN_FILENO);            
+            execvp(programs[i]->argv[0], programs[i]->argv);
+        }        
+    }
+    for (int i = 0; i + 1 < n; i++) {
+        close(pipefd[i][0]);
+        close(pipefd[i][1]);
+    }
+
     childn = n;
-    childa = (int*) child;
+    childa = (int*)child;
     struct sigaction act;
     memset(&act, '\0', sizeof(act));
     act.sa_handler = &sig_handler;
-   
-    if (sigaction(SIGINT, &act, NULL) < 0) 
-        return -1;
 
-	for (int i = 0, status; i < n; i++) 
+    if (sigaction(SIGINT, &act, NULL) < 0) {
+    	for (int j = 0; j < n; j++) {
+        		kill(child[j], SIGKILL);
+        		waitpid(child[j], NULL, 0);
+        }
+    	return -1;
+    }
+
+    int status;
+    for (int i = 0; i < n; i++) {
         waitpid(child[i], &status, 0);
-    childn = 0;
+    }
+    childn = 0;    
     return 0;
 }
+

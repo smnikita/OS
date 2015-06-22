@@ -1,151 +1,156 @@
 #define _GNU_SOURCE
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/ioctl.h>
+#include <netinet/ip.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <limits.h>
+#include <signal.h>
+#include <poll.h>
+#include <errno.h>
 
 #include "bufio.h"
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <string.h>
-#include <signal.h>
-#include <poll.h>
-#include <stdio.h>
+#define err(s) {perror(s);return 1;}
 
-#define BUF_SZ 4096
-#define MAX_CONNECTS 127
+const int MAX_FDS = 256;
+const int MAX_BUFS = 127;
+const int BUF_SZ = 4096;
 
-struct pollfd polls[MAX_CONNECTS * 2 + 2];
-struct buf_t* buffs[MAX_CONNECTS * 2];
-int polls_cnt = 0;
-int current = 0;
-
-int create_server(struct addrinfo* info) {
-	int sock1 = socket(info->ai_family, SOCK_STREAM, 0);
-	if (sock1 < 0) {
-		return -1;
-	}
-	if (bind(sock1, info->ai_addr, info->ai_addrlen)) {
-		return -1;
-	}
-	if (listen(sock1, 1)) {
-		return -1;
-	}
-	return sock1;
+void swap_bufs(struct buf_t **a, struct buf_t **b) {
+    struct buf_t *t = *a;
+    *a = *b;
+    *b = t;
 }
 
-void close_pair(int i) {
-	if (polls_cnt == 2 * MAX_CONNECTS) polls[current].events = POLLIN;
-	close(polls[i + 2].fd);
-	close(polls[(i + 2) ^ 1].fd);
-	buf_free(buffs[i]);
-	buf_free(buffs[i ^ 1]);
-	if (polls_cnt > 3) {
-		i &= ~1;
-		polls[i + 2] = polls[polls_cnt];
-		polls[i + 3] = polls[polls_cnt + 1];
-		buffs[i] = buffs[polls_cnt - 2];
-		buffs[i + 1] = buffs[polls_cnt - 1];
-	}
-	polls_cnt -= 2;
+void sigpipe_off(int sig) {
+
 }
 
-int main(int argc, char** argv) {
-	if (argc != 3) {
-		write(STDOUT_FILENO, "Usage: <port1> <port2>\n", 23);
-		return 1;
-	}
+int main(int argn, char** argv) {
+    if (argn != 3) {
+        printf("usage: polling <port 1> <port 2>\n");
+        return 0;
+    }
 
-	struct addrinfo *info1, *info2;
-			
-	if (getaddrinfo("localhost", argv[1], 0, &info1)) {		
-		return 1;
-	}
-	if (getaddrinfo("localhost", argv[2], 0, &info2)) {		
-		return 1;
-	}
+    struct sigaction sigact;
+    memset(&sigact, '\0', sizeof(sigact));
+    sigact.sa_handler = &sigpipe_off;
 
-	int sock1 = create_server(info1);
-	int sock2 = create_server(info2);
-	if (sock1 < 0 || sock2 < 0) {
-		return 1;
-	}
+    if (sigaction(SIGPIPE, &sigact, NULL) < 0) return 1;
 
-	freeaddrinfo(info1);
-	freeaddrinfo(info2);
-	
-	polls[0].fd = sock1;
-	polls[1].fd = sock2;
+    int listener1 = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int listener2 = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listener1 == -1 || listener2 == -1) return 1;
+    int one = 1;
+    if (setsockopt(listener1, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(int)) == -1 || 
+    	setsockopt(listener2, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(int)) == -1) return 1;
+    struct addrinfo* info;
+    if (getaddrinfo("0.0.0.0", argv[1], NULL, &info) == -1) return 1;
+    if (bind(listener1, info->ai_addr, info->ai_addrlen) == -1) return 1;
+    freeaddrinfo(info);
+    if (getaddrinfo("0.0.0.0", argv[2], NULL, &info) == -1) return 1;
+    if (bind(listener2, info->ai_addr, info->ai_addrlen) == -1) return 1;
+    freeaddrinfo(info);
+    if (listen(listener1, 1) == -1 || listen(listener2, 1) == -1) return 1;
 
-	polls[0].events = POLLIN;
+    struct sockaddr_in client;
+    socklen_t sz;
+    int clientfd, i;
+    struct pollfd fds[MAX_FDS];
+    memset(fds, 0, MAX_FDS * sizeof(struct pollfd));
+    fds[0].fd = listener1;
+    fds[0].events = POLLIN;
+    fds[1].fd = listener2;
+    fds[1].events = POLLIN;
+    nfds_t nfds = 2;
+    int polls, oldnfds;
+    struct buf_t* bufs[MAX_BUFS][2];
+    for (i = 0; i < MAX_BUFS; i++) {
+        bufs[i][0] = buf_new(BUF_SZ);
+        bufs[i][1] = buf_new(BUF_SZ);
+        if (bufs[i][0] == 0 || bufs[i][1] == 0) return 1;
+    }
+    short fails[MAX_FDS]; //0 - ok, 1 - read, 2 - write, 3 - read and write
+    int buf;
+    while (1) {
+        polls = poll(fds, nfds, -1);
+        if (polls == -1) {
+            if (errno == EINTR) continue; else err("poll");            
+        }
+        oldnfds = nfds;
+        if (nfds <= MAX_FDS - 2 && (fds[0].revents & POLLIN) > 0 && (fds[1].revents & POLLIN) > 0) {        	
+            sz = sizeof(client);
+            clientfd = accept(listener1, (struct sockaddr*)&client, &sz);
+            fds[nfds].fd = clientfd;
+            fds[nfds].events = POLLIN;
+            fails[nfds] = 0;
+            bufs[nfds / 2][0]->size = 0;
+            bufs[nfds / 2][1]->size = 0;
+            nfds++;
+            sz = sizeof(client);
+            clientfd = accept(listener2, (struct sockaddr*)&client, &sz);
+            fds[nfds].fd = clientfd;
+            fds[nfds].events = POLLIN;
+            fails[nfds] = 0;
+            nfds++;
+        }
+        for (i = 2; i < oldnfds; i++) {
+            if ((fds[i].revents & POLLIN) > 0) {
+                buf = i / 2 - 1;                
+                if (buf_fill(fds[i].fd, bufs[buf][i % 2], 1) <= 0) {
+                    shutdown(fds[i].fd, SHUT_RD);
+                    fails[i] |= 1;
+                    fails[i ^ 1] |= 2;
+                }
+            }
+        }
+        for (i = 2; i < oldnfds; i++) {
+            if ((fds[i].revents & POLLOUT) > 0) {
+                buf = i / 2 - 1;                
+                if (buf_flush(fds[i].fd, bufs[buf][1 - i % 2], buf_size(bufs[buf][1 - i % 2])) <= 0) {
+                    shutdown(fds[i].fd, SHUT_WR);
+                    fails[i] |= 2;
+                    fails[i ^ 1] |= 1;
+                }
+            }
+        }
+        for (i = oldnfds / 2 - 1; i >= 0; i--) {
+            fds[2 + 2 * i].events = 0;
+            fds[3 + 2 * i].events = 0;
+            if (buf_size(bufs[i][0]) > 0 && (fails[3 + 2 * i] & 2) == 0) {
+                fds[3 + 2 * i].events |= POLLOUT;
+            }
+            if (buf_size(bufs[i][0]) < buf_capacity(bufs[i][0]) && (fails[2 + 2 * i] & 1) == 0) {
+                fds[2 + 2 * i].events |= POLLIN;
+            }
+            if (buf_size(bufs[i][1]) > 0 && (fails[2 + 2 * i] & 2) == 0) {
+                fds[2 + 2 * i].events |= POLLOUT;
+            }
+            if (buf_size(bufs[i][1]) < buf_capacity(bufs[i][1]) && (fails[3 + 2 * i] & 1) == 0) {
+                fds[3 + 2 * i].events |= POLLIN;
+            }
+        }
+        for (i = 2; i < nfds; i += 2) {
+            if (fails[i] == 3 || fails[i + 1] == 3 || (fails[i] == fails[i + 1] && (fails[i] == 1 || fails[i] == 2))) {
+                close(fds[i].fd);
+                close(fds[i + 1].fd);
+                fds[i] = fds[nfds - 2];
+                fds[i + 1] = fds[nfds - 1];
+                fails[i] = fails[nfds - 2];
+                fails[i + 1] = fails[nfds - 1];                
 
-	while (1) {
-		int cnt = poll(polls, polls_cnt + 2, -1);
-		if (cnt < 0) {			
-			continue;
-		}
-		short event = polls[current].revents;
-		if (event) {
-			if (event & POLLIN) {
-				polls[current].events = 0;	
-				polls[current].revents = 0;	
-				int new_fd = accept(polls[current].fd, 0, 0);
-				if (new_fd < 0) {					
-					continue;
-				}
-				buffs[polls_cnt] = buf_new(BUF_SZ);
-				polls[polls_cnt + 2].events = POLLIN | POLLRDHUP;
-				polls[polls_cnt + 2].fd = new_fd;
-				polls_cnt++;
-				current ^= 1;
-				if (polls_cnt < 2 * MAX_CONNECTS)
-					polls[current].events = POLLIN;
-			}
-		}
-		for (int i = 0; i < polls_cnt; i++) {
-			short event = polls[i + 2].revents;
-			polls[i + 2].revents = 0;
-			if (event) {
-				if (event & POLLOUT) {
-					size_t old = buf_size(buffs[i ^ 1]);
-					buf_flush(polls[i + 2].fd, buffs[i ^ 1], 1);
-					if (buf_size(buffs[i ^ 1]) == 0) 
-						polls[i + 2].events &= ~POLLOUT;
-					if (old == buf_capacity(buffs[i ^ 1]) && buf_size(buffs[i ^ 1]) < buf_capacity(buffs[i ^ 1])) 
-						polls[(i + 2) ^ 1].events |= POLLIN;
-				}
-				if (event & POLLIN) {
-					size_t old = buf_size(buffs[i]);	
-					buf_fill(polls[i + 2].fd, buffs[i], buf_size(buffs[i]) + 1);
-					if (buf_size(buffs[i]) == buf_capacity(buffs[i]))
-						polls[i + 2].events &= ~POLLIN;
-					if (old == 0 && buf_size(buffs[i]) > 0) 
-						polls[(i + 2) ^ 1].events |= POLLOUT;
-				}
-				if (event & POLLRDHUP) {
-					shutdown(polls[(i + 2) ^ 1].fd, SHUT_WR);
-					polls[(i + 2) ^ 1].events &= ~POLLOUT;
-					if (~polls[i + 2].events & ~polls[(i + 2) ^ 1].events) {
-						close_pair(i);
-						i |= 1;
-						continue;
-					}
-				}
-				if (event & POLLHUP) {
-					shutdown(polls[(i + 2) ^ 1].fd, SHUT_RD);
-					polls[(i + 2) ^ 1].events &= ~POLLIN;
-					if (~polls[i + 2].events & ~polls[(i + 2) ^ 1].events) {
-						close_pair(i);
-						i |= 1;
-						continue;
-					}
-				}
-				if (event & POLLERR) {
-					i |= 1;
-					close_pair(i);
-				}
-			}
-		}
-	}
-	return 0;
+                swap_bufs(&bufs[(i - 2) / 2][0], &bufs[(nfds - 3) / 2][0]);
+                swap_bufs(&bufs[(i - 2) / 2][1], &bufs[(nfds - 3) / 2][1]); 
+                nfds -= 2;
+            }
+        }
+    }
+    return 0;
 }
